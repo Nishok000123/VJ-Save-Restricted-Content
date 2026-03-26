@@ -40,3 +40,19 @@ WAITING_TIME = int(os.environ.get("WAITING_TIME", "10")) # time in seconds
 
 # If You Want Error Message In Your Personal Message Then Turn It True Else If You Don't Want Then Flase
 ERROR_MESSAGE = bool(os.environ.get('ERROR_MESSAGE', True))
+
+# Force users to join this channel before using the bot.
+# Set to your channel username (e.g. "@mychannel") or numeric ID (e.g. "-1001234567890").
+# Leave blank to disable the force-subscribe check.
+FORCE_SUB = os.environ.get("FORCE_SUB", "")
+
+# Auto-delete messages sent by the bot after this many seconds.
+# Set to 0 to disable auto-deletion.
+AUTO_DELETE_TIME = int(os.environ.get("AUTO_DELETE_TIME", "0")) # time in seconds
+
+# Maximum number of messages allowed in a single batch request.
+# Helps prevent abuse and account ban due to too many requests.
+MAX_BATCH_SIZE = int(os.environ.get("MAX_BATCH_SIZE", "100"))
+
+# If True, all content sent by the bot will be forward-protected (cannot be forwarded by users).
+PROTECT_CONTENT = bool(os.environ.get('PROTECT_CONTENT', False))

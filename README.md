@@ -29,6 +29,10 @@
 - `DB_URI` : Your Mongodb Database Url From [Mongodb](https://mongodb.com) Watch [Video Tutorial](https://youtu.be/DAHRmFdw99o) ( ⚠️ Warning - Give Db Url on deploy website environment variable, don't give in repo )
 - `WAITING_TIME` : Increase Time To Avoid Spamming, Floodwait and Tg Account Ban Issue.
 - `ERROR_MESSAGE` : Set True Or False, If You Want Error Message Then True Else False.
+- `FORCE_SUB` : Channel username (e.g. `@mychannel`) or numeric ID users must join before using the bot. Leave blank to disable.
+- `AUTO_DELETE_TIME` : Time in seconds after which messages sent by the bot are automatically deleted. Set to `0` to disable.
+- `MAX_BATCH_SIZE` : Maximum number of messages allowed in a single batch request. Default is `100`. Helps prevent abuse.
+- `PROTECT_CONTENT` : Set True to enable forward-protection on all content sent by the bot. Default is False.
 
 ---
 
