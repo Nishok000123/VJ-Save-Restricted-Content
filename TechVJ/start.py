@@ -9,7 +9,7 @@ import pyrogram
 from pyrogram import Client, filters, enums
 from pyrogram.errors import FloodWait, UserIsBlocked, InputUserDeactivated, UserAlreadyParticipant, InviteHashExpired, UsernameNotOccupied
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message 
-from config import API_ID, API_HASH, ERROR_MESSAGE, LOGIN_SYSTEM, STRING_SESSION, CHANNEL_ID, WAITING_TIME
+from config import API_ID, API_HASH, ERROR_MESSAGE, LOGIN_SYSTEM, STRING_SESSION, CHANNEL_ID, WAITING_TIME, FORCE_SUB, AUTO_DELETE_TIME, MAX_BATCH_SIZE, PROTECT_CONTENT
 from database.db import db
 from TechVJ.strings import HELP_TXT
 from bot import TechVJUser
@@ -57,6 +57,32 @@ def progress(current, total, message, type):
         fileup.write(f"{current * 100 / total:.1f}%")
 
 
+# force-subscribe check
+async def is_subscribed(client: Client, user_id: int) -> bool:
+    """Return True when FORCE_SUB is disabled or the user is already a member."""
+    if not FORCE_SUB:
+        return True
+    try:
+        member = await client.get_chat_member(FORCE_SUB, user_id)
+        return member.status.value not in ("left", "kicked", "banned")
+    except Exception:
+        return False
+
+
+# auto-delete helper
+async def auto_delete(client: Client, chat_id: int, message_ids):
+    """Delete messages after AUTO_DELETE_TIME seconds when the feature is enabled."""
+    if not AUTO_DELETE_TIME:
+        return
+    await asyncio.sleep(AUTO_DELETE_TIME)
+    try:
+        if isinstance(message_ids, int):
+            message_ids = [message_ids]
+        await client.delete_messages(chat_id, message_ids)
+    except Exception:
+        pass
+
+
 # start command
 @Client.on_message(filters.command(["start"]))
 async def send_start(client: Client, message: Message):
@@ -98,6 +124,22 @@ async def send_cancel(client: Client, message: Message):
 
 @Client.on_message(filters.text & filters.private)
 async def save(client: Client, message: Message):
+    # Force-subscribe check
+    if not await is_subscribed(client, message.from_user.id):
+        try:
+            invite_link = await client.export_chat_invite_link(FORCE_SUB)
+        except Exception:
+            invite_link = f"https://t.me/{FORCE_SUB.lstrip('@')}"
+        buttons = [[InlineKeyboardButton("✅ Join Channel", url=invite_link)]]
+        sent = await client.send_message(
+            message.chat.id,
+            "**You must join our channel to use this bot.\n\nAfter joining, send your link again.**",
+            reply_markup=InlineKeyboardMarkup(buttons),
+            reply_to_message_id=message.id
+        )
+        asyncio.create_task(auto_delete(client, message.chat.id, sent.id))
+        return
+
     # Joining chat
     if ("https://t.me/+" in message.text or "https://t.me/joinchat/" in message.text) and LOGIN_SYSTEM == False:
         if TechVJUser is None:
@@ -126,6 +168,11 @@ async def save(client: Client, message: Message):
             toID = int(temp[1].strip())
         except:
             toID = fromID
+
+        # Enforce MAX_BATCH_SIZE
+        if (toID - fromID + 1) > MAX_BATCH_SIZE:
+            toID = fromID + MAX_BATCH_SIZE - 1
+            await message.reply_text(f"**Batch size limited to {MAX_BATCH_SIZE} messages. Processing from {fromID} to {toID}.**")
 
         if LOGIN_SYSTEM == True:
             user_data = await db.get_session(message.from_user.id)
@@ -202,7 +249,8 @@ async def save(client: Client, message: Message):
                     await client.send_message(message.chat.id, "The username is not occupied by anyone", reply_to_message_id=message.id)
                     break
                 try:
-                    await client.copy_message(pub_chat, msg.chat.id, msg.id, reply_to_message_id=reply_id)
+                    sent = await client.copy_message(pub_chat, msg.chat.id, msg.id, reply_to_message_id=reply_id, protect_content=PROTECT_CONTENT)
+                    asyncio.create_task(auto_delete(client, pub_chat, sent.id))
                 except:
                     try:    
                         await handle_private(client, acc, message, username, msgid)               
@@ -240,7 +288,8 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
     if batch_temp.IS_BATCH.get(message.from_user.id): return 
     if "Text" == msg_type:
         try:
-            await client.send_message(chat, msg.text, entities=msg.entities, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
+            sent = await client.send_message(chat, msg.text, entities=msg.entities, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT)
+            asyncio.create_task(auto_delete(client, chat, sent.id))
             return 
         except Exception as e:
             if ERROR_MESSAGE == True:
@@ -265,6 +314,7 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
         caption = None
     if batch_temp.IS_BATCH.get(message.from_user.id): return 
             
+    sent = None
     if "Document" == msg_type:
         try:
             ph_path = await acc.download_media(msg.document.thumbs[0].file_id)
@@ -272,7 +322,7 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
             ph_path = None
         
         try:
-            await client.send_document(chat, file, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[message,"up"])
+            sent = await client.send_document(chat, file, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT, progress=progress, progress_args=[message,"up"])
         except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
@@ -286,7 +336,7 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
             ph_path = None
         
         try:
-            await client.send_video(chat, file, duration=msg.video.duration, width=msg.video.width, height=msg.video.height, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[message,"up"])
+            sent = await client.send_video(chat, file, duration=msg.video.duration, width=msg.video.width, height=msg.video.height, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT, progress=progress, progress_args=[message,"up"])
         except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
@@ -294,21 +344,21 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
 
     elif "Animation" == msg_type:
         try:
-            await client.send_animation(chat, file, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
+            sent = await client.send_animation(chat, file, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT)
         except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
         
     elif "Sticker" == msg_type:
         try:
-            await client.send_sticker(chat, file, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
+            sent = await client.send_sticker(chat, file, reply_to_message_id=message.id, protect_content=PROTECT_CONTENT)
         except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)     
 
     elif "Voice" == msg_type:
         try:
-            await client.send_voice(chat, file, caption=caption, caption_entities=msg.caption_entities, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[message,"up"])
+            sent = await client.send_voice(chat, file, caption=caption, caption_entities=msg.caption_entities, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT, progress=progress, progress_args=[message,"up"])
         except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
@@ -320,7 +370,7 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
             ph_path = None
 
         try:
-            await client.send_audio(chat, file, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, progress=progress, progress_args=[message,"up"])   
+            sent = await client.send_audio(chat, file, thumb=ph_path, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT, progress=progress, progress_args=[message,"up"])   
         except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
@@ -329,8 +379,8 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
 
     elif "Photo" == msg_type:
         try:
-            await client.send_photo(chat, file, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
-        except:
+            sent = await client.send_photo(chat, file, caption=caption, reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML, protect_content=PROTECT_CONTENT)
+        except Exception as e:
             if ERROR_MESSAGE == True:
                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id, parse_mode=enums.ParseMode.HTML)
     
@@ -338,6 +388,8 @@ async def handle_private(client: Client, acc, message: Message, chatid: int, msg
         os.remove(f'{message.id}upstatus.txt')
         os.remove(file)
     await client.delete_messages(message.chat.id,[smsg.id])
+    if sent:
+        asyncio.create_task(auto_delete(client, chat, sent.id))
 
 
 # get the type of message
