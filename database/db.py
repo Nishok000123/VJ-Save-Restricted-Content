@@ -11,6 +11,7 @@ class Database:
         self._client = motor.motor_asyncio.AsyncIOMotorClient(uri)
         self.db = self._client[database_name]
         self.col = self.db.users
+        self.tasks = self.db.tasks
 
     def new_user(self, id, name):
         return dict(
@@ -59,6 +60,38 @@ class Database:
     async def get_api_hash(self, id):
         user = await self.col.find_one({'id': int(id)})
         return user.get('api_hash')
+
+    # ── Batch-task helpers (resume after restart) ─────────────────────────
+
+    def new_task(self, user_id, user_chat_id, req_msg_id, url, link_type, target, from_id, to_id):
+        return dict(
+            user_id=int(user_id),
+            user_chat_id=int(user_chat_id),
+            req_msg_id=int(req_msg_id),
+            url=url,
+            link_type=link_type,
+            target=str(target),
+            from_id=int(from_id),
+            to_id=int(to_id),
+            current_id=int(from_id) - 1,
+        )
+
+    async def save_batch_task(self, user_id, user_chat_id, req_msg_id, url, link_type, target, from_id, to_id):
+        task = self.new_task(user_id, user_chat_id, req_msg_id, url, link_type, target, from_id, to_id)
+        await self.tasks.update_one(
+            {'user_id': int(user_id)},
+            {'$set': task},
+            upsert=True,
+        )
+
+    async def update_batch_task(self, user_id, current_id):
+        await self.tasks.update_one({'user_id': int(user_id)}, {'$set': {'current_id': int(current_id)}})
+
+    async def delete_batch_task(self, user_id):
+        await self.tasks.delete_many({'user_id': int(user_id)})
+
+    async def get_all_batch_tasks(self):
+        return self.tasks.find({})
 
 db = Database(DB_URI, "TechVJDemoBot")
 
