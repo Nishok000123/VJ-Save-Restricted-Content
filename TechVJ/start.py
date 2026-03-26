@@ -3,6 +3,7 @@
 # Ask Doubt on telegram @KingVJ01
 
 import os
+import types
 import asyncio 
 import pyrogram
 from pyrogram import Client, filters, enums
@@ -89,6 +90,7 @@ async def send_help(client: Client, message: Message):
 @Client.on_message(filters.command(["cancel"]))
 async def send_cancel(client: Client, message: Message):
     batch_temp.IS_BATCH[message.from_user.id] = True
+    await db.delete_batch_task(message.from_user.id)
     await client.send_message(
         chat_id=message.chat.id, 
         text="**Batch Successfully Cancelled.**"
@@ -144,6 +146,23 @@ async def save(client: Client, message: Message):
             acc = TechVJUser
 				
         batch_temp.IS_BATCH[message.from_user.id] = False
+
+        # Determine link type and target for DB-backed resume support
+        if "https://t.me/c/" in message.text:
+            link_type = 'private'
+            link_target = "-100" + datas[4]
+        elif "https://t.me/b/" in message.text:
+            link_type = 'bot'
+            link_target = datas[4]
+        else:
+            link_type = 'public'
+            link_target = datas[3]
+
+        await db.save_batch_task(
+            message.from_user.id, message.chat.id, message.id,
+            message.text, link_type, link_target, fromID, toID
+        )
+
         for msgid in range(fromID, toID+1):
             if batch_temp.IS_BATCH.get(message.from_user.id): break
             
@@ -168,20 +187,31 @@ async def save(client: Client, message: Message):
             # public
             else:
                 username = datas[3]
+                if CHANNEL_ID:
+                    try:
+                        pub_chat = int(CHANNEL_ID)
+                    except ValueError:
+                        pub_chat = CHANNEL_ID
+                else:
+                    pub_chat = message.chat.id
+                reply_id = message.id if pub_chat == message.chat.id else None
 
                 try:
                     msg = await client.get_messages(username, msgid)
                 except UsernameNotOccupied: 
                     await client.send_message(message.chat.id, "The username is not occupied by anyone", reply_to_message_id=message.id)
-                    return
+                    break
                 try:
-                    await client.copy_message(message.chat.id, msg.chat.id, msg.id, reply_to_message_id=message.id)
+                    await client.copy_message(pub_chat, msg.chat.id, msg.id, reply_to_message_id=reply_id)
                 except:
                     try:    
                         await handle_private(client, acc, message, username, msgid)               
                     except Exception as e:
                         if ERROR_MESSAGE == True:
                             await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
+
+            # update progress in DB for resume support
+            await db.update_batch_task(message.from_user.id, msgid)
 
             # wait time
             await asyncio.sleep(WAITING_TIME)
@@ -191,6 +221,7 @@ async def save(client: Client, message: Message):
             except:
                 pass                				
         batch_temp.IS_BATCH[message.from_user.id] = True
+        await db.delete_batch_task(message.from_user.id)
 
 
 # handle private
@@ -359,6 +390,150 @@ def get_message_type(msg: pyrogram.types.messages_and_media.message.Message):
     except:
         pass
         
+
+# ── Resume helpers ────────────────────────────────────────────────────────
+
+async def resume_pending_batches(client: Client):
+    """Called on bot startup to resume any interrupted batch tasks."""
+    try:
+        pending = await db.get_all_batch_tasks()
+    except Exception:
+        return
+    async for task in pending:
+        asyncio.create_task(_resume_batch(client, task))
+
+
+async def _resume_batch(client: Client, task: dict):
+    """Process the remaining messages of a single interrupted batch task."""
+    user_id = task['user_id']
+    user_chat_id = task['user_chat_id']
+    req_msg_id = task.get('req_msg_id', 0)
+    url = task['url']
+    link_type = task['link_type']
+    target = task['target']
+    from_id = task['from_id']
+    to_id = task['to_id']
+    current_id = task.get('current_id', from_id - 1)
+
+    resume_from = current_id + 1
+    if resume_from > to_id:
+        await db.delete_batch_task(user_id)
+        return
+
+    try:
+        await client.send_message(
+            user_chat_id,
+            f"**🔄 Bot restarted. Resuming your batch task from message {resume_from} to {to_id}...**"
+        )
+    except Exception:
+        pass
+
+    # Reconnect user session
+    if LOGIN_SYSTEM == True:
+        user_data = await db.get_session(user_id)
+        if user_data is None:
+            await db.delete_batch_task(user_id)
+            try:
+                await client.send_message(user_chat_id, "**❌ Session expired. Cannot resume batch. Please start again.**")
+            except Exception:
+                pass
+            return
+        try:
+            api_id = int(await db.get_api_id(user_id))
+            api_hash = await db.get_api_hash(user_id)
+            acc = Client("saverestricted", session_string=user_data, api_hash=api_hash, api_id=api_id)
+            await acc.connect()
+        except Exception as e:
+            await db.delete_batch_task(user_id)
+            try:
+                await client.send_message(user_chat_id, f"**❌ Cannot resume batch. Login error: {e}**")
+            except Exception:
+                pass
+            return
+    else:
+        if TechVJUser is None:
+            await db.delete_batch_task(user_id)
+            return
+        acc = TechVJUser
+
+    # Construct a lightweight stand-in for the original Message object
+    fake_msg = types.SimpleNamespace(
+        id=req_msg_id,
+        from_user=types.SimpleNamespace(id=user_id),
+        chat=types.SimpleNamespace(id=user_chat_id),
+        text=url,
+    )
+
+    batch_temp.IS_BATCH[user_id] = False
+
+    for msgid in range(resume_from, to_id + 1):
+        if batch_temp.IS_BATCH.get(user_id):
+            break
+
+        if link_type == 'private':
+            try:
+                await handle_private(client, acc, fake_msg, int(target), msgid)
+            except Exception as e:
+                if ERROR_MESSAGE:
+                    try:
+                        await client.send_message(user_chat_id, f"Error: {e}")
+                    except Exception:
+                        pass
+
+        elif link_type == 'bot':
+            try:
+                await handle_private(client, acc, fake_msg, target, msgid)
+            except Exception as e:
+                if ERROR_MESSAGE:
+                    try:
+                        await client.send_message(user_chat_id, f"Error: {e}")
+                    except Exception:
+                        pass
+
+        else:  # public
+            if CHANNEL_ID:
+                try:
+                    pub_chat = int(CHANNEL_ID)
+                except ValueError:
+                    pub_chat = CHANNEL_ID
+            else:
+                pub_chat = user_chat_id
+            try:
+                msg = await client.get_messages(target, msgid)
+                try:
+                    await client.copy_message(pub_chat, msg.chat.id, msg.id)
+                except Exception:
+                    try:
+                        await handle_private(client, acc, fake_msg, target, msgid)
+                    except Exception as e:
+                        if ERROR_MESSAGE:
+                            try:
+                                await client.send_message(user_chat_id, f"Error: {e}")
+                            except Exception:
+                                pass
+            except Exception as e:
+                if ERROR_MESSAGE:
+                    try:
+                        await client.send_message(user_chat_id, f"Error: {e}")
+                    except Exception:
+                        pass
+
+        await db.update_batch_task(user_id, msgid)
+        await asyncio.sleep(WAITING_TIME)
+
+    if LOGIN_SYSTEM == True:
+        try:
+            await acc.disconnect()
+        except Exception:
+            pass
+
+    batch_temp.IS_BATCH[user_id] = True
+    await db.delete_batch_task(user_id)
+
+    try:
+        await client.send_message(user_chat_id, "**✅ Resumed batch task completed.**")
+    except Exception:
+        pass
 
 # Don't Remove Credit @VJ_Bots
 # Subscribe YouTube Channel For Amazing Bot @Tech_VJ

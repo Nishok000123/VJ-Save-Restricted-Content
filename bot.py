@@ -2,6 +2,7 @@
 # Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
+import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN, STRING_SESSION, LOGIN_SYSTEM
 
@@ -28,6 +29,9 @@ class Bot(Client):
     async def start(self):
             
         await super().start()
+        # Resume any interrupted batch tasks that were in progress before restart
+        from TechVJ.start import resume_pending_batches
+        asyncio.create_task(resume_pending_batches(self))
         print('Bot Started Powered By @VJ_Bots')
 
     async def stop(self, *args):
