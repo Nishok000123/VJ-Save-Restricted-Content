@@ -183,29 +183,31 @@ async def save(client: Client, message: Message):
             message.text, link_type, link_target, fromID, toID
         )
 
-        _total_msgs = toID - fromID + 1
-        _done_msgs = 0
-        _failed_msgs = 0
+        total_msgs = toID - fromID + 1
+        done_msgs = 0
+        failed_msgs = 0
         active_jobs[message.from_user.id] = {
-            "link": message.text, "done": 0, "total": _total_msgs, "failed": 0, "status": "running",
+            "link": message.text, "done": 0, "total": total_msgs, "failed": 0, "status": "running",
         }
-        _status_msg = await message.reply(
+        status_msg = await message.reply(
             f"📥 **Starting batch forward...**\n"
-            f"🔢 Total: `{_total_msgs}` messages\n"
+            f"🔢 Total: `{total_msgs}` messages\n"
             f"🔗 `{message.text}`"
         )
 
         try:
             for msgid in range(fromID, toID+1):
-                if batch_temp.IS_BATCH.get(message.from_user.id): break
-                _msg_ok = False
+                if batch_temp.IS_BATCH.get(message.from_user.id):
+                    active_jobs[message.from_user.id]["status"] = "cancelled"
+                    break
+                msg_ok = False
 
                 # private
                 if "https://t.me/c/" in message.text:
                     chatid = int("-100" + datas[4])
                     try:
                         await handle_private(client, acc, message, chatid, msgid)
-                        _msg_ok = True
+                        msg_ok = True
                     except Exception as e:
                         if ERROR_MESSAGE == True:
                             await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
@@ -215,7 +217,7 @@ async def save(client: Client, message: Message):
                     username = datas[4]
                     try:
                         await handle_private(client, acc, message, username, msgid)
-                        _msg_ok = True
+                        msg_ok = True
                     except Exception as e:
                         if ERROR_MESSAGE == True:
                             await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
@@ -239,25 +241,25 @@ async def save(client: Client, message: Message):
                         break
                     try:
                         await client.copy_message(pub_chat, msg.chat.id, msg.id, reply_to_message_id=reply_id)
-                        _msg_ok = True
+                        msg_ok = True
                     except:
                         try:    
                             await handle_private(client, acc, message, username, msgid)
-                            _msg_ok = True
+                            msg_ok = True
                         except Exception as e:
                             if ERROR_MESSAGE == True:
                                 await client.send_message(message.chat.id, f"Error: {e}", reply_to_message_id=message.id)
 
                 # update done/failed counters and live progress bar
-                if _msg_ok:
-                    _done_msgs += 1
+                if msg_ok:
+                    done_msgs += 1
                 else:
-                    _failed_msgs += 1
-                active_jobs[message.from_user.id]["done"] = _done_msgs
-                active_jobs[message.from_user.id]["failed"] = _failed_msgs
-                _current = _done_msgs + _failed_msgs
-                if _current % 5 == 0 or _current == _total_msgs:
-                    await update_progress_message(_status_msg, _current, _total_msgs, _failed_msgs, message.text)
+                    failed_msgs += 1
+                active_jobs[message.from_user.id]["done"] = done_msgs
+                active_jobs[message.from_user.id]["failed"] = failed_msgs
+                current = done_msgs + failed_msgs
+                if current % 5 == 0 or current == total_msgs:
+                    await update_progress_message(status_msg, current, total_msgs, failed_msgs, message.text)
 
                 # update progress in DB for resume support
                 await db.update_batch_task(message.from_user.id, msgid)
@@ -267,7 +269,7 @@ async def save(client: Client, message: Message):
         finally:
             active_jobs.pop(message.from_user.id, None)
 
-        await send_done_message(_status_msg, _total_msgs, _failed_msgs, message.text)
+        await send_done_message(status_msg, total_msgs, failed_msgs, message.text)
 
         if LOGIN_SYSTEM == True:
             try:
