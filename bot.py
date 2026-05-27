@@ -2,13 +2,6 @@
 # Subscribe YouTube Channel For Amazing Bot https://youtube.com/@Tech_VJ
 # Ask Doubt on telegram @KingVJ01
 
-# ─────────────────────────────────────────────
-# bot.py  –  UPDATED (replace your existing bot.py with this)
-# Changes vs original:
-#   • Starts run_scheduler() background task on boot
-#   • Keeps resume_pending_batches() call (already in your fork)
-# ─────────────────────────────────────────────
-
 import asyncio
 from pyrogram import Client
 from config import API_ID, API_HASH, BOT_TOKEN, STRING_SESSION, LOGIN_SYSTEM
@@ -36,12 +29,12 @@ class Bot(Client):
     async def start(self):
         await super().start()
 
-        # ── Resume any batches interrupted by a restart ──
+        # Resume any batches interrupted by a restart
         from TechVJ.start import resume_pending_batches
         asyncio.create_task(resume_pending_batches(self))
 
-        # ── Start scheduled-batch background loop ──
-        from TechVJ.schedule import run_scheduler
+        # Start the scheduled-batch background loop (NEW)
+        from TechVJ.start import run_scheduler
         asyncio.create_task(run_scheduler(self))
 
         print('Bot Started Powered By @VJ_Bots')
